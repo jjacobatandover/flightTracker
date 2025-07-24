@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>JetBlue Itinerary Viewer</title>
+  <script src="https://cdn.jsdelivr.net/npm/luxon@3/build/global/luxon.min.js"></script>
+  <style>
+    body { font-family: sans-serif; padding: 20px; background: #f8f8f8; }
+    h1 { margin-bottom: 10px; }
+    input, select { margin-right: 10px; padding: 5px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 20px; background: #fff; }
+    th, td { border: 1px solid #ccc; padding: 6px 8px; text-align: left; }
+    th { background: #eee; }
+    tr:nth-child(even) { background: #f2f2f2; }
+
+    .low { background-color: #c8e6c9; }
+    .mid { background-color: #fff9c4; }
+    .high { background-color: #ffcdd2; }
+
+    .layover { padding: 2px 4px; border-radius: 3px; font-size: 0.9em; margin-left: 6px; }
+    .layover-excellent { background-color: #81c784; }
+    .layover-good     { background-color: #aed581; }
+    .layover-okay     { background-color: #fff176; }
+    .layover-meh      { background-color: #ffb74d; }
+    .layover-bad      { background-color: #e57373; }
+  </style>
+</head>
+<body>
+  <h1>JetBlue Itinerary Viewer</h1>
+
+  <label for="originFilter">Start Airport:</label>
+  <select id="originFilter"></select>
+
+  <label for="maxPrice">Max Total Price:</label>
+  <input type="number" id="maxPrice" placeholder="e.g. 200">
+
+  <label for="sortBy">Sort By:</label>
+  <select id="sortBy">
+    <option value="price">Price</option>
+    <option value="duration">Total Duration</option>
+    <option value="airports">Unique Airports</option>
+  </select>
+
+  <button onclick="renderTable()">Filter & Sort</button>
+
+  <table id="itineraryTable">
+    <thead>
+      <tr>
+        <th>Date</th>
+        <th>Origin</th>
+        <th>Legs</th>
+        <th>Total Price</th>
+        <th>Total Time</th>
+        <th>Unique Airports</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+
+  <script>
+    let itineraries = [];
+
+    function layoverClass(mins) {
+      if (mins >= 50 && mins <= 90) return "layover-excellent";
+      if (mins > 90 && mins <= 150) return "layover-good";
+      if (mins >= 30 && mins < 50) return "layover-okay";
+      if (mins < 30) return "layover-bad";
+      return "layover-meh";
+    }
+
+    async function loadData() {
+      const res = await fetch('./processed_itineraries.json');
+      itineraries = await res.json();
+
+      const origins = [...new Set(itineraries.map(it => it.legs[0].from))].sort();
+      const select = document.getElementById('originFilter');
+      select.innerHTML = `<option value="">All</option>`;
+      origins.forEach(origin => {
+        const opt = document.createElement('option');
+        opt.value = origin;
+        opt.textContent = origin;
+        select.appendChild(opt);
+      });
+    }
+
+    function renderTable() {
+      const origin = document.getElementById('originFilter').value;
+      const maxPrice = parseFloat(document.getElementById('maxPrice').value);
+      const sortBy = document.getElementById('sortBy').value;
+      const tbody = document.querySelector('#itineraryTable tbody');
+      tbody.innerHTML = '';
+
+      let filtered = itineraries
+        .filter(it => (!origin || it.legs[0].from === origin))
+        .filter(it => isNaN(maxPrice) || it.total_price <= maxPrice);
+
+      if (sortBy === "price") {
+        filtered.sort((a, b) => a.total_price - b.total_price);
+      } else if (sortBy === "duration") {
+        filtered.sort((a, b) => a.total_duration_hours - b.total_duration_hours);
+      } else if (sortBy === "airports") {
+        filtered.sort((a, b) => (b.unique_airports_visited?.length || 0) - (a.unique_airports_visited?.length || 0));
+      }
+
+      filtered.forEach(it => {
+        const tr = document.createElement('tr');
+
+        const tdDate = document.createElement('td');
+        tdDate.textContent = it.date || "—";
+        tr.appendChild(tdDate);
+
+        const tdOrigin = document.createElement('td');
+        tdOrigin.textContent = it.legs[0].from;
+        tr.appendChild(tdOrigin);
+
+        const tdLegs = document.createElement('td');
+        tdLegs.innerHTML = it.legs.map((leg, idx) => {
+          const d = luxon.DateTime.fromISO(leg.departure_dt);
+          const a = luxon.DateTime.fromISO(leg.arrival_dt);
+          const timeStr = (d.isValid && a.isValid)
+            ? `${d.toFormat('HH:mm')}–${a.toFormat('HH:mm')}`
+            : "Invalid Time";
+
+          const layoverText = (idx > 0 && it.layovers && it.layovers[idx - 1] != null)
+            ? `<span class="layover ${layoverClass(it.layovers[idx - 1])}">+${Math.round(it.layovers[idx - 1])}m</span>`
+            : '';
+
+          return `${leg.from} → ${leg.to} ($${leg.price}, ${timeStr}) ${layoverText}`;
+        }).join('<br>');
+        tr.appendChild(tdLegs);
+
+        const tdPrice = document.createElement('td');
+        tdPrice.textContent = `$${it.total_price.toFixed(2)}`;
+        tdPrice.className = it.total_price <= 75 ? 'low' : it.total_price <= 100 ? 'mid' : 'high';
+        tr.appendChild(tdPrice);
+
+        const tdTime = document.createElement('td');
+        tdTime.textContent = `${it.total_duration_hours.toFixed(2)} hrs`;
+        tr.appendChild(tdTime);
+
+        const tdAirports = document.createElement('td');
+        if (it.unique_airports_visited) {
+          tdAirports.innerHTML = `<strong>${it.unique_airports_visited.length}</strong><br>${it.unique_airports_visited.join(', ')}`;
+        } else {
+          tdAirports.textContent = '—';
+        }
+        tr.appendChild(tdAirports);
+
+        tbody.appendChild(tr);
+      });
+    }
+
+    loadData().then(renderTable);
+  </script>
+</body>
+</html>
